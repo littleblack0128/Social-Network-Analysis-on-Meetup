@@ -1,0 +1,196 @@
+---
+title: "Group Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+```{r}
+library(tnet)
+library(igraph)
+library(sna)
+```
+
+# Read edges csv
+```{r}
+edge<-read.csv("member-edges.csv",header=TRUE, stringsAsFactors = FALSE, na.strings = "NA")
+```
+
+# Remove default id number
+```{r}
+edge<-edge[,2:4]
+```
+
+#set id as character since they represent members
+```{r}
+edge[,1]<-as.character(edge[,1])
+edge[,2]<-as.character(edge[,2])
+```
+
+# Read nodes csv
+```{r}
+nodes<-read.csv("meta-members.csv",header=TRUE, stringsAsFactors = FALSE, na.strings = "NA")
+```
+
+# Only analyze vertices of edges in nodes.csv
+```{r}
+edgenew=edge[edge$member1 %in% nodes$member_id,]
+edgenew2=edge[edge$member2 %in% nodes$member_id,]
+```
+
+# Get directed full model
+```{r}
+full<-graph_from_data_frame(d=edgenew2, directed = TRUE)
+V(full)
+full.adj<-get.adjacency(full)
+full.matrix<-as.matrix(full.adj)
+summary(full)
+```
+
+# Since original data is too huge to plot, we will only use first 1,000 rows data to plot
+```{r}
+partialplot1<-graph_from_data_frame(d=edgenew2[1:1000,], directed = TRUE)
+partialplot1sim <- simplify(partialplot1, remove.multiple = F, remove.loops = T) 
+plot.igraph(partialplot1sim,vertex.label.cex=0.5,vertex.size=5,vertex.label=NA,edge.arrow.size=.4)
+```
+
+# Select the largest component in our network for more significant information
+```{r}
+dg <- decompose.graph(partialplot1) # returns a list of three graphs
+plot(dg[[1]]) # plot e.g. the 1st one
+```
+
+
+# Compute the indegree and outdegree centrality for each node
+```{r}
+deg_in <- igraph::degree(full, mode="in") 
+deg_out <- igraph::degree(full, mode="out") 
+```
+
+
+# Compute shortest paths between each pair of nodes. 
+```{r}
+sp_in <- igraph::shortest.paths(full, mode='in')
+sp_out <- igraph::shortest.paths(full, mode='out')
+```
+
+# Closeness centrality
+```{r}
+closeness_in <- igraph::closeness(full, mode='in')
+closeness_out <- igraph::closeness(full, mode='out')
+```
+
+# Betweenness centrality measures the number of shortest paths
+# going through a specific vertex; it is returned by the 
+# betweenness() function.
+```{r}
+between_net <- igraph::betweenness(full)
+```
+
+# Eigenvector centrality gives greater weight to a node the more 
+# it is connected to other highly connected nodes. A node
+# connected to five high-scoring nodes will have higher 
+# eigenvector centrality than a node connected to five low-scoring
+# nodes. Thus, it is often interpreted as measuring a node's
+# network importance.
+```{r}
+eigenv_net_vector <- igraph::evcent(full,directed=FALSE)$vector
+```
+
+# Summarize results above
+```{r}
+central_net <- data.frame(V(full)$name, deg_in,deg_out,closeness_in,closeness_out, between_net, eigenv_net_vector)
+head(central_net)
+
+central_net[order(-central_net$deg_in),] 
+central_net[order(-central_net$deg_out),] 
+central_net[order(-central_net$closeness_in),] 
+central_net[order(-central_net$closeness_out),]   
+central_net[order(-central_net$between_net),]
+central_net[order(-central_net$eigenv_net_vector),]
+# Do more barplot
+barplot(central_net$deg_in,names.arg=central_net$V.full..name)
+boxplot(central_net$deg_in,main="distribution of deg_in")
+barplot(central_net$deg_out,names.arg=central_net$V.full..name)
+barplot(central_net$closeness_in,names.arg=central_net$V.full..name)
+barplot(central_net$closeness_out,names.arg=central_net$V.full..name)
+barplot(central_net$between_net,names.arg=central_net$V.full..name)
+barplot(central_net$eigenv_net_vector,names.arg=central_net$V.full..name)
+
+central_net[with(central_net, order(-deg_in, -deg_out, closeness_in, closeness_out, -between_net, -eigenv_net_vector)),]
+```
+
+#CORRELATIONS BETWEEN CENTRALITY MEASURES
+```{r}
+cor(central_net[,2:7])
+
+library(corrplot)
+corrplot(cor(central_net[,2:7]), order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+```
+
+
+## Reachability
+#Reachability can only be computed on one vertex at a time. To get graph-wide statistics, 
+#change the value of "vertex" manually or write a for loop. (Remember that, unlike R objects, 
+#igraph objects are numbered from 0.)
+```{r}
+reachability <- function(g, m) {   
+  reach_mat = matrix(nrow = vcount(partialplot1),                       
+                     ncol = vcount(partialplot1))   
+  for(i in 1:vcount(partialplot1)) {     
+    reach_mat[i,] = 0     
+    this_node_reach <- subcomponent(g, i, mode = m) # used "i" instead of "(i - 1)"      
+    for(j in 1:(length(this_node_reach))) {       
+      alter = this_node_reach[j] # removed "+ 1"       
+      reach_mat[i, alter] = 1     
+    }   
+  }   
+  return(reach_mat) 
+} 
+
+reach_full_in <- reachability(partialplot1, 'in')
+reach_full_out <- reachability(partialplot1, 'out')
+
+mean(reach_full_in)
+mean(reach_full_out)
+sd(reach_full_in)
+sd(reach_full_out)
+```
+
+
+# Function to layout  coreness
+```{r}
+CorenessLayout <- function(g) {
+  coreness <- graph.coreness(g);
+  xy <- array(NA, dim=c(length(coreness), 2));
+  
+  shells <- sort(unique(coreness));
+  for(shell in shells) {
+    v <- 1 - ((shell-1) / max(shells));
+    nodes_in_shell <- sum(coreness==shell);
+    angles <- seq(0,360,(360/nodes_in_shell));
+    angles <- angles[-length(angles)]; # remove last element
+    xy[coreness==shell, 1] <- sin(angles) * v;
+    xy[coreness==shell, 2] <- cos(angles) * v;
+  }
+  return(xy);
+}
+
+# Compute coreness
+coreness <- graph.coreness(full);
+# Assign colors
+colbar <- rainbow(max(coreness));
+# Create layout
+ll <- CorenessLayout(full);
+# Plot
+plot(full, layout=ll, 
+     vertex.size=5, 
+     vertex.color=colbar[coreness], 
+     vertex.frame.color=colbar[coreness],
+     vertex.label=NA,
+     main='Coreness')
+```
